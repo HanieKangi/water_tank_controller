@@ -14,62 +14,47 @@ using std::placeholders::_1;
 using namespace std::chrono_literals;
 
 
-class PIDController {
+class PIController {
   private:
     double kp_;
     double ki_;
-    double kd_;
-
 
     double min_output_;
     double max_output_;
-    double prev_level_ = 0.0;
     double integral_;
-    double prev_error_;
-    bool first_run_;
-
+    
   public:
 
-    PIDController(double kp, double ki, double kd, double min_out, double max_out) :
-      kp_(kp), ki_(ki), kd_(kd), 
+    PIController(double kp, double ki, double min_out, double max_out) :
+      kp_(kp), ki_(ki), 
       min_output_(min_out), max_output_(max_out),
-      integral_(0.0), prev_error_(0.0), first_run_(true) {} 
+      integral_(0.0) {} 
 
       double compute(double setpoint,double measured_value, double dt) {
 
         double  error = setpoint - measured_value;
 
         double P = kp_ * error;
-
-        integral_ += error * dt;
-        double I = ki_ * integral_;
-
-        double driative = 0.0;
-        if (!first_run_) {
-          driative = (error - prev_error_) / dt;
-        }else {
-          first_run_ = false;
+        
+        double limit = 0.25 * setpoint;
+        if(error < limit && error > -limit){
+          integral_ += error * dt;
         }
-        double D = kd_ * driative;
-        double output = P + I + D;
+        double I = ki_  * integral_;
+        
+        double output = P + I;
         double clamped_output = std::clamp(output , min_output_, max_output_);
-
-        if (output != clamped_output && ki_ != 0.0) {
-          integral_ -= error * dt;  
-        }
 
         prev_error_ = error;
 
-
         return clamped_output;
       }
+    
+    void reset() {
+      integral_ = 0.0;
+    }
 
-      void reset() {
-        integral_ = 0.0;
-        prev_error_ = 0.0;
-        first_run_ = true;
-      }
-
+      
 };
 
 
@@ -81,10 +66,10 @@ class TankController : public rclcpp::Node
     : Node("tank_controller"), 
       setpoint_(4.5),
       current_level_ (0.0), 
-      pid_(32.0, 2, 15.0, 0.0, 100.0),
+      pi_(37.0, 3.7, 0.0, 100.0),
       last_time_(this->now())
     {
-        RCLCPP_INFO(this->get_logger() , "Tank PID controller node started.");
+        
         subscription_ = this->create_subscription<water_tank_interface::msg::TankOutput>(
         "water_level", 10 , std::bind(&TankController::water_level_callback, this, _1));
 
@@ -98,6 +83,13 @@ class TankController : public rclcpp::Node
 
     void water_level_callback(const water_tank_interface::msg::TankOutput & msg) 
     {
+      if (current_level_ - msg.level > 0.5) {
+        pi_.reset();
+        RCLCPP_WARN(
+          this->get_logger(),
+          "Simulation reset!"
+        );
+      }
       current_level_ = msg.level;
       RCLCPP_INFO(this->get_logger(), "I heard: '%f'", msg.level);
     }
@@ -105,27 +97,23 @@ class TankController : public rclcpp::Node
 
     void timer_callback()
     {
-      if (prev_level_ - current_level_ > 1.0) {
-        pid_.reset();
-        RCLCPP_INFO(this->get_logger(), "Simulator reset detected -> PID memory reset.");
-      }
       rclcpp::Time current_time = this->now();
       double dt = (current_time - last_time_).seconds();
       if (dt <= 0.0) {
         return;
       }
-      prev_level_ = current_level_;
+     
       last_time_ = current_time;
-      double valve_cmd = pid_.compute(setpoint_, current_level_, dt);
+      double valve_cmd = pi_.compute(setpoint_, current_level_, dt);
       auto command = water_tank_interface::msg::TankInput();
       command.inlet_valve= static_cast<float>(valve_cmd);
       RCLCPP_INFO(this->get_logger(), "Publishing: '%f'", command.inlet_valve);
       publisher_->publish(command);
     }
-    double prev_level_ = 0.0;
+   
     double setpoint_;
     double current_level_;
-    PIDController pid_;
+    PIController pi_;
     rclcpp::Time last_time_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<water_tank_interface::msg::TankInput>::SharedPtr publisher_;
