@@ -22,13 +22,14 @@ class PIController {
     double min_output_;
     double max_output_;
     double integral_;
-    
+    double prev_error_;
+
   public:
 
     PIController(double kp, double ki, double min_out, double max_out) :
       kp_(kp), ki_(ki), 
       min_output_(min_out), max_output_(max_out),
-      integral_(0.0) {} 
+      integral_(0.0), prev_error_(0.0) {} 
 
       double compute(double setpoint,double measured_value, double dt) {
 
